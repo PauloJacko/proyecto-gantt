@@ -20,8 +20,9 @@ export default function GanttApp() {
   const [nuevaFechaInicioProj, setNuevaFechaInicioProj] = useState('2026-10-01')
   const [nuevaFechaFinProj, setNuevaFechaFinProj] = useState('2026-12-31')
 
-  // Modales Tarea
+  // Modales Tarea (Crear / Editar)
   const [mostrarModalTarea, setMostrarModalTarea] = useState(false)
+  const [tareaEnEdicionId, setTareaEnEdicionId] = useState<number | null>(null) // null = creando nueva, número = editando existente
   const [nuevaTarea, setNuevaTarea] = useState<Partial<TareaGantt>>({
     msp_id: '1.1',
     nombre: '',
@@ -75,6 +76,8 @@ export default function GanttApp() {
       setProyectos(data)
       if (data.length > 0 && !proyectoSeleccionado) {
         setProyectoSeleccionado(data[0])
+      } else if (data.length === 0) {
+        setProyectoSeleccionado(null)
       }
     }
   }
@@ -128,41 +131,137 @@ export default function GanttApp() {
     }
   }
 
-  // Agregar Tarea
-  const agregarTarea = async (e: React.FormEvent) => {
+  // Eliminar Proyecto con Cascada
+  const eliminarProyectoActual = async () => {
+    if (!proyectoSeleccionado) return
+    const confirmar = confirm(`¿Estás seguro de eliminar el proyecto "${proyectoSeleccionado.nombre}" y todas sus tareas asociadas?`)
+    if (!confirmar) return
+
+    await supabase.from('tareas').delete().eq('proyecto_id', proyectoSeleccionado.id)
+    const { error } = await supabase.from('proyectos').delete().eq('id', proyectoSeleccionado.id)
+
+    if (!error) {
+      const proximaLista = proyectos.filter(p => p.id !== proyectoSeleccionado.id)
+      setProyectos(proximaLista)
+      setProyectoSeleccionado(proximaLista.length > 0 ? proximaLista[0] : null)
+    } else {
+      alert('Hubo un error al eliminar el proyecto.')
+    }
+  }
+
+  // Abrir modal para crear nueva tarea
+  const abrirModalNuevaTarea = () => {
+    setTareaEnEdicionId(null)
+    const hoyReal = new Date()
+    const fechaLocal = (fecha: Date) => {
+      const anio = fecha.getFullYear()
+      const mes = String(fecha.getMonth() + 1).padStart(2, '0')
+      const dia = String(fecha.getDate()).padStart(2, '0')
+      return `${anio}-${mes}-${dia}`
+    }
+    const hoyStr = fechaLocal(hoyReal)
+    const fechaFin = new Date(hoyReal)
+    fechaFin.setDate(fechaFin.getDate() + 7)
+    const finStr = fechaLocal(fechaFin)
+
+    setNuevaTarea({
+      msp_id: '1.1',
+      nombre: '',
+      fecha_inicio: hoyStr,
+      fecha_fin: finStr,
+      progreso: 0,
+      tipo: 'task',
+      encargado: '',
+      dependencias: '',
+    })
+    setMostrarModalTarea(true)
+  }
+
+  // Abrir modal para editar tarea existente
+  const abrirModalEditarTarea = (t: TareaGantt) => {
+    setTareaEnEdicionId(t.id ?? null)
+    setNuevaTarea({
+      msp_id: t.msp_id,
+      nombre: t.nombre,
+      fecha_inicio: t.fecha_inicio,
+      fecha_fin: t.fecha_fin,
+      progreso: t.progreso,
+      tipo: t.tipo,
+      encargado: t.encargado,
+      dependencias: t.dependencias,
+    })
+    setMostrarModalTarea(true)
+  }
+
+  // Guardar Tarea (Crea o Actualiza según corresponda)
+  const guardarTarea = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!proyectoSeleccionado || !nuevaTarea.nombre) return
 
-    const payload = {
-      proyecto_id: proyectoSeleccionado.id,
-      msp_id: nuevaTarea.msp_id || '1',
-      nombre: nuevaTarea.nombre,
-      fecha_inicio: nuevaTarea.fecha_inicio,
-      fecha_fin: nuevaTarea.fecha_fin,
-      progreso: Number(nuevaTarea.progreso) || 0,
-      tipo: nuevaTarea.tipo || 'task',
-      encargado: nuevaTarea.encargado || '',
-      dependencias: nuevaTarea.dependencias || '',
-    }
+if (tareaEnEdicionId !== null) {
+      // --- EDITAR TAREA EXISTENTE ---
+      const payload = {
+        msp_id: nuevaTarea.msp_id || '1',
+        nombre: nuevaTarea.nombre || '',
+        fecha_inicio: nuevaTarea.fecha_inicio || '',
+        fecha_fin: nuevaTarea.fecha_fin || '',
+        tipo: nuevaTarea.tipo || 'task',
+        encargado: nuevaTarea.encargado || '',
+        dependencias: nuevaTarea.dependencias || '',
+      }
 
-    const { data, error } = await supabase
-      .from('tareas')
-      .insert([payload])
-      .select()
+      const { error } = await supabase
+        .from('tareas')
+        .update(payload)
+        .eq('id', tareaEnEdicionId)
 
-    if (error) {
-      console.error('Error al agregar tarea:', error)
-      alert('No se pudo guardar la tarea. Revisa la consola.')
-      return
-    }
+      if (error) {
+        console.error('Error al actualizar tarea:', error)
+        alert('No se pudo actualizar la tarea.')
+        return
+      }
 
-    if (data && data.length > 0) {
       setTareas((prev) =>
-        [...prev, data[0]].sort((a, b) =>
-          a.msp_id.localeCompare(b.msp_id, undefined, { numeric: true })
-        )
+        prev
+          .map((t) => (t.id === tareaEnEdicionId ? ({ ...t, ...payload } as TareaGantt) : t))
+          .sort((a, b) => a.msp_id.localeCompare(b.msp_id, undefined, { numeric: true }))
       )
       setMostrarModalTarea(false)
+      setTareaEnEdicionId(null)
+
+    } else {
+      // --- CREAR NUEVA TAREA ---
+      const payload = {
+        proyecto_id: proyectoSeleccionado.id,
+        msp_id: nuevaTarea.msp_id || '1',
+        nombre: nuevaTarea.nombre,
+        fecha_inicio: nuevaTarea.fecha_inicio,
+        fecha_fin: nuevaTarea.fecha_fin,
+        progreso: 0,
+        tipo: nuevaTarea.tipo || 'task',
+        encargado: nuevaTarea.encargado || '',
+        dependencias: nuevaTarea.dependencias || '',
+      }
+
+      const { data, error } = await supabase
+        .from('tareas')
+        .insert([payload])
+        .select()
+
+      if (error) {
+        console.error('Error al agregar tarea:', error)
+        alert('No se pudo guardar la tarea. Revisa la consola.')
+        return
+      }
+
+      if (data && data.length > 0) {
+        setTareas((prev) =>
+          [...prev, data[0]].sort((a, b) =>
+            a.msp_id.localeCompare(b.msp_id, undefined, { numeric: true })
+          )
+        )
+        setMostrarModalTarea(false)
+      }
     }
   }
 
@@ -172,6 +271,34 @@ export default function GanttApp() {
     const { error } = await supabase.from('tareas').delete().eq('id', id)
     if (!error) {
       setTareas(tareas.filter((t) => t.id !== id))
+    }
+  }
+
+  // Actualizar Progreso Real directamente desde la casilla de la tabla
+  const actualizarProgresoReal = async (id: number, nuevoProgreso: number) => {
+    const tareaActual = tareas.find(t => t.id === id)
+    if (!tareaActual) return
+
+    const esFase = tareaActual.tipo === 'project' || !tareaActual.msp_id.includes('.')
+    const hijas = tareas.filter(t => t.msp_id.startsWith(tareaActual.msp_id + '.') && t.msp_id !== tareaActual.msp_id)
+    if (esFase && hijas.length > 0) {
+      alert('Las fases principales calculan su progreso real automáticamente en base a sus subtareas.')
+      return
+    }
+
+    const progresoValido = Math.min(100, Math.max(0, nuevoProgreso))
+
+    setTareas((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, progreso: progresoValido } : t))
+    )
+
+    const { error } = await supabase
+      .from('tareas')
+      .update({ progreso: progresoValido })
+      .eq('id', id)
+
+    if (error) {
+      console.error('Error al actualizar % Real:', error)
     }
   }
 
@@ -279,6 +406,40 @@ export default function GanttApp() {
     }
   }
 
+  // --- CÁLCULO DINÁMICO DEL % ESPERADO Y REAL (CON SOPORTE PARA FASES PRINCIPALES) ---
+  const calcularPorcentajesTarea = (t: TareaGantt): { esperado: number; real: number } => {
+    const esFase = t.tipo === 'project' || !t.msp_id.includes('.')
+    const hijas = tareas.filter(item => item.msp_id.startsWith(t.msp_id + '.') && item.msp_id !== t.msp_id)
+
+    if (esFase && hijas.length > 0) {
+      const sumaReal = hijas.reduce((acc, h) => acc + (h.progreso || 0), 0)
+      const sumaEsp = hijas.reduce((acc, h) => acc + calcularPorcentajesTarea(h).esperado, 0)
+      return {
+        esperado: Math.round(sumaEsp / hijas.length),
+        real: Math.round(sumaReal / hijas.length)
+      }
+    }
+
+    const inicioMs = fechaToUtcMs(t.fecha_inicio)
+    const finMs = fechaToUtcMs(t.fecha_fin)
+
+    let esperado = 0
+    if (hoyUtcMs >= inicioMs) {
+      if (hoyUtcMs > finMs) {
+        esperado = 100
+      } else {
+        const duracionTotal = Math.max(1, Math.round((finMs - inicioMs) / unDiaMs) + 1)
+        const diasTranscurridos = Math.round((hoyUtcMs - inicioMs) / unDiaMs) + 1
+        esperado = Math.min(100, Math.max(0, Math.round((diasTranscurridos / duracionTotal) * 100)))
+      }
+    }
+
+    return {
+      esperado,
+      real: t.progreso || 0
+    }
+  }
+
   // Cálculo exacto de la línea de "HOY" utilizando el estado seguro del cliente
   const offsetHoyDias = Math.round((hoyUtcMs - inicioProjMs) / unDiaMs)
   const posicionHoyPx = offsetHoyDias * 32 + 16
@@ -337,7 +498,7 @@ export default function GanttApp() {
       <header className="bg-slate-900 text-white px-4 py-2.5 flex flex-wrap justify-between items-center shadow border-b border-slate-800">
         <div className="flex items-center space-x-3">
           <span className="text-xl">📊</span>
-          <h1 className="text-base font-bold tracking-wide">Sistema GANTT Profesional (Estilo MS Project)</h1>
+          <h1 className="text-base font-bold tracking-wide">Sistema GANTT</h1>
         </div>
 
         <div className="flex items-center space-x-3">
@@ -366,7 +527,15 @@ export default function GanttApp() {
           {proyectoSeleccionado && (
             <>
               <button
-                onClick={() => setMostrarModalTarea(true)}
+                onClick={eliminarProyectoActual}
+                className="bg-red-600/80 hover:bg-red-600 text-white px-3 py-1 rounded text-xs font-semibold transition flex items-center space-x-1"
+                title="Eliminar proyecto actual y sus tareas"
+              >
+                <span>🗑️ Eliminar Proyecto</span>
+              </button>
+
+              <button
+                onClick={abrirModalNuevaTarea}
                 className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-xs font-semibold transition"
               >
                 + Tarea
@@ -387,20 +556,26 @@ export default function GanttApp() {
         <div className="flex-1 flex overflow-x-auto bg-white border-t border-slate-200">
           
           {/* PANEL IZQUIERDO: TABLA DE TAREAS */}
-          <div className="w-[500px] min-w-[500px] border-r border-slate-200 flex flex-col bg-white z-10 shadow-lg">
-            <div className="grid grid-cols-12 bg-slate-100 text-slate-600 font-bold text-[11px] uppercase tracking-wider border-b border-slate-200 py-2.5 px-3">
+          <div className="w-[620px] min-w-[620px] border-r border-slate-200 flex flex-col bg-white z-10 shadow-lg">
+            <div className="grid grid-cols-12 bg-slate-100 text-slate-600 font-bold text-[11px] uppercase tracking-wider border-b border-slate-200 py-2.5 px-3 items-center">
               <div className="col-span-2">MSP ID</div>
-              <div className="col-span-5">Nombre de tarea</div>
-              <div className="col-span-3">Encargado</div>
-              <div className="col-span-1 text-center" title="Dependencias">Dep</div>
+              <div className="col-span-3">Nombre de tarea</div>
+              <div className="col-span-2">Encargado</div>
+              <div className="col-span-1 text-center" title="Progreso Esperado">% ESP</div>
+              <div className="col-span-1 text-center" title="Progreso Real">% REAL</div>
+              <div className="col-span-1 text-center" title="Dependencias">DEP</div>
+              <div className="col-span-1 text-center" title="Editar">⚙️</div>
               <div className="col-span-1 text-center">✕</div>
             </div>
 
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
               {tareas.length > 0 ? (
                 tareas.map((t) => {
-                  const esFase = t.tipo === 'project'
-                  const nivelIndentacion = (t.msp_id.split('.').length - 1) * 12
+                  const esFase = t.tipo === 'project' || !t.msp_id.includes('.')
+                  const nivelProfundidad = t.msp_id.split('.').length - 1
+                  const { esperado: porcentajeEsperado, real: porcentajeReal } = calcularPorcentajesTarea(t)
+                  const estaRetrasado = porcentajeReal < porcentajeEsperado
+
                   return (
                     <div
                       key={t.id}
@@ -408,19 +583,63 @@ export default function GanttApp() {
                         esFase ? 'bg-blue-50/70 font-bold text-slate-900' : 'text-slate-700'
                       }`}
                     >
-                      <div className="col-span-2 font-mono text-slate-500">{t.msp_id}</div>
-                      <div className="col-span-5 truncate pr-2" title={t.nombre}>
-                        <span style={{ paddingLeft: `${nivelIndentacion}px` }} className="inline-block">
-                          {esFase ? '📁 ' : '🔹 '}
-                          {t.nombre}
-                        </span>
+                      <div className="col-span-2 font-mono text-slate-500 font-bold">{t.msp_id}</div>
+                      
+                      {/* Columna Nombre con sangría clara y jerárquica */}
+                      <div className="col-span-3 flex items-center pr-2 overflow-hidden" title={t.nombre}>
+                        <div 
+                          style={{ marginLeft: `${nivelProfundidad * 14}px` }} 
+                          className="flex items-center space-x-1 truncate"
+                        >
+                          <span>{esFase ? '📁' : '🔹'}</span>
+                          <span className="truncate">{t.nombre}</span>
+                        </div>
                       </div>
-                      <div className="col-span-3 text-slate-500 truncate" title={t.encargado}>
+
+                      <div className="col-span-2 text-slate-500 truncate" title={t.encargado}>
                         {t.encargado || '-'}
                       </div>
+
+                      {/* % Esperado */}
+                      <div className="col-span-1 text-center font-mono text-slate-500 font-semibold text-[11px]">
+                        {porcentajeEsperado}%
+                      </div>
+
+                      {/* % Real */}
+                      <div className="col-span-1 flex justify-center">
+                        {esFase ? (
+                          <span className="font-mono font-bold text-[11px] text-blue-900">{porcentajeReal}%</span>
+                        ) : (
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={t.progreso}
+                            onChange={(e) => actualizarProgresoReal(t.id!, Number(e.target.value))}
+                            className={`w-10 text-center font-mono font-bold text-[11px] border rounded py-0.5 px-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 ${
+                              estaRetrasado 
+                                ? 'text-red-600 bg-red-50 border-red-300' 
+                                : 'text-emerald-700 bg-emerald-50 border-emerald-300'
+                            }`}
+                          />
+                        )}
+                      </div>
+
                       <div className="col-span-1 text-center font-mono text-[10px] text-amber-600 font-bold" title={t.dependencias || 'Sin dependencias'}>
                         {t.dependencias || '-'}
                       </div>
+
+                      {/* Botón Editar Tarea */}
+                      <div className="col-span-1 text-center">
+                        <button
+                          onClick={() => abrirModalEditarTarea(t)}
+                          className="text-blue-500 hover:text-blue-700 font-bold p-1 transition"
+                          title="Editar tarea (MSP ID, Nombre, Encargado, Fechas)"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+
                       <div className="col-span-1 text-center">
                         <button
                           onClick={() => eliminarTarea(t.id)}
@@ -538,7 +757,7 @@ export default function GanttApp() {
                             strokeWidth="12"
                             onDoubleClick={() => {
                               if (confirm(`¿Deseas eliminar la dependencia entre "${tareaPadre.nombre}" y "${tarea.nombre}"?`)) {
-                                desconectarTareas(tarea.id, tareaPadre.msp_id)
+                                desconectarTareas(tarea.id!, tareaPadre.msp_id)
                               }
                             }}
                           />
@@ -553,7 +772,7 @@ export default function GanttApp() {
                             className="hover:stroke-red-500 hover:stroke-[3px] transition"
                             onDoubleClick={() => {
                               if (confirm(`¿Deseas eliminar la dependencia entre "${tareaPadre.nombre}" y "${tarea.nombre}"?`)) {
-                                desconectarTareas(tarea.id, tareaPadre.msp_id)
+                                desconectarTareas(tarea.id!, tareaPadre.msp_id)
                               }
                             }}
                           />
@@ -597,8 +816,9 @@ export default function GanttApp() {
                 )}
 
                 {tareas.map((t, index) => {
-                  const esFase = t.tipo === 'project'
+                  const esFase = t.tipo === 'project' || !t.msp_id.includes('.')
                   const { left, width } = calcularPosicionBarra(t.fecha_inicio, t.fecha_fin)
+                  const { real: porcentajeReal } = calcularPorcentajesTarea(t)
 
                   return (
                     <div 
@@ -622,24 +842,26 @@ export default function GanttApp() {
                       >
                         {/* Circulito izquierdo (Punto de llegada de dependencia) */}
                         <div 
-                          onMouseUp={() => registrarDestino(t.id)}
+                          onMouseUp={() => registrarDestino(t.id!)}
                           className="absolute -left-1.5 w-3 h-3 bg-amber-400 border-2 border-white rounded-full shadow cursor-pointer hover:scale-125 transition z-30" 
                           title="Soltar aquí para conectar dependencia" 
                         />
 
+                        {/* Relleno de progreso real */}
                         <div
-                          className="absolute left-0 top-0 bottom-0 bg-emerald-400/40 rounded-l pointer-events-none"
-                          style={{ width: `${t.progreso}%` }}
+                          className="absolute left-0 top-0 bottom-0 bg-emerald-400/50 rounded-l pointer-events-none"
+                          style={{ width: `${porcentajeReal}%` }}
                         />
+
                         <span className="text-[10px] text-white truncate font-medium relative z-10">
-                          {t.nombre} ({t.progreso}%)
+                          {t.nombre} (Real: {porcentajeReal}%)
                         </span>
 
                         {/* Circulito derecho (Punto de partida para arrastrar la línea) */}
                         <div 
                           onMouseDown={(e) => {
                             e.stopPropagation()
-                            setTareaOrigenId(t.id)
+                            setTareaOrigenId(t.id!)
                           }}
                           className="absolute -right-1.5 w-3 h-3 bg-amber-500 border-2 border-white rounded-full shadow cursor-grab active:cursor-grabbing hover:scale-125 transition z-30" 
                           title="Haz clic y arrastra hacia otra tarea para crear una dependencia" 
@@ -733,12 +955,14 @@ export default function GanttApp() {
         </div>
       )}
 
-      {/* Modal Nueva Tarea */}
+      {/* Modal Crear / Editar Tarea */}
       {mostrarModalTarea && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-xl p-6 max-w-lg w-full shadow-2xl border border-slate-100">
-            <h3 className="text-lg font-bold text-slate-900 mb-4">Agregar Tarea o Fase</h3>
-            <form onSubmit={agregarTarea} className="space-y-4">
+            <h3 className="text-lg font-bold text-slate-900 mb-4">
+              {tareaEnEdicionId !== null ? '✏️ Editar Tarea' : '➕ Agregar Tarea o Fase'}
+            </h3>
+            <form onSubmit={guardarTarea} className="space-y-4">
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">MSP ID</label>
@@ -777,28 +1001,15 @@ export default function GanttApp() {
                 />
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Encargado</label>
-                  <input
-                    type="text"
-                    placeholder="Ej: Mauro Huerta"
-                    value={nuevaTarea.encargado || ''}
-                    onChange={(e) => setNuevaTarea({ ...nuevaTarea, encargado: e.target.value })}
-                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">% Progreso</label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    value={nuevaTarea.progreso || 0}
-                    onChange={(e) => setNuevaTarea({ ...nuevaTarea, progreso: Number(e.target.value) })}
-                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Encargado</label>
+                <input
+                  type="text"
+                  placeholder="Ej: Mauro Huerta"
+                  value={nuevaTarea.encargado || ''}
+                  onChange={(e) => setNuevaTarea({ ...nuevaTarea, encargado: e.target.value })}
+                  className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                />
               </div>
 
               <div className="grid grid-cols-3 gap-3">
@@ -843,7 +1054,7 @@ export default function GanttApp() {
                   Cancelar
                 </button>
                 <button type="submit" className="px-4 py-2 text-sm bg-emerald-600 text-white rounded font-medium hover:bg-emerald-500">
-                  Guardar Tarea
+                  {tareaEnEdicionId !== null ? 'Actualizar Tarea' : 'Guardar Tarea'}
                 </button>
               </div>
             </form>
