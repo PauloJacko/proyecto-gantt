@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Proyecto, TareaGantt } from '@/types/gantt'
 import { exportToMSProjectXML, downloadXMLFile } from '@/lib/xmlProjectParser'
@@ -9,27 +9,67 @@ export default function GanttApp() {
   const [proyectos, setProyectos] = useState<Proyecto[]>([])
   const [proyectoSeleccionado, setProyectoSeleccionado] = useState<Proyecto | null>(null)
   const [tareas, setTareas] = useState<TareaGantt[]>([])
-  const [cargando, setCargando] = useState<boolean>(true)
 
-  // Modales
+  // Estado seguro para la fecha actual de "HOY" (evita errores de SSR en Next.js)
+  const [hoyUtcMs, setHoyUtcMs] = useState<number>(Date.UTC(2026, 9, 21, 12, 0, 0))
+
+  // Modales Proyecto
   const [mostrarModalProyecto, setMostrarModalProyecto] = useState(false)
   const [nuevoNombreProyecto, setNuevoNombreProyecto] = useState('')
   const [nuevoEncargadoProyecto, setNuevoEncargadoProyecto] = useState('')
+  const [nuevaFechaInicioProj, setNuevaFechaInicioProj] = useState('2026-10-01')
+  const [nuevaFechaFinProj, setNuevaFechaFinProj] = useState('2026-12-31')
 
+  // Modales Tarea
   const [mostrarModalTarea, setMostrarModalTarea] = useState(false)
   const [nuevaTarea, setNuevaTarea] = useState<Partial<TareaGantt>>({
     msp_id: '1.1',
     nombre: '',
-    fecha_inicio: new Date().toISOString().split('T')[0],
-    fecha_fin: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
+    fecha_inicio: '2026-10-05',
+    fecha_fin: '2026-10-12',
     progreso: 0,
     tipo: 'task',
     encargado: '',
+    dependencias: '',
   })
+
+  // Estado para el Arrastre de Conectores (Drag and Drop interactivo global)
+  const [tareaOrigenId, setTareaOrigenId] = useState<number | null>(null)
+  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
+
+  // Asignar fechas seguras en cliente al montar el componente
+  useEffect(() => {
+    const hoyReal = new Date()
+    setHoyUtcMs(
+      Date.UTC(
+        hoyReal.getFullYear(),
+        hoyReal.getMonth(),
+        hoyReal.getDate(),
+        12, 0, 0
+      )
+    )
+
+    const fechaLocal = (fecha: Date) => {
+      const anio = fecha.getFullYear()
+      const mes = String(fecha.getMonth() + 1).padStart(2, '0')
+      const dia = String(fecha.getDate()).padStart(2, '0')
+      return `${anio}-${mes}-${dia}`
+    }
+
+    const hoyStr = fechaLocal(hoyReal)
+    const fechaFin = new Date(hoyReal)
+    fechaFin.setDate(fechaFin.getDate() + 7)
+    const finStr = fechaLocal(fechaFin)
+
+    setNuevaTarea((prev) => ({
+      ...prev,
+      fecha_inicio: prev.fecha_inicio || hoyStr,
+      fecha_fin: prev.fecha_fin || finStr,
+    }))
+  }, [])
 
   // Cargar proyectos
   const cargarProyectos = async () => {
-    setCargando(true)
     const { data, error } = await supabase.from('proyectos').select('*').order('id', { ascending: true })
     if (!error && data) {
       setProyectos(data)
@@ -37,7 +77,6 @@ export default function GanttApp() {
         setProyectoSeleccionado(data[0])
       }
     }
-    setCargando(false)
   }
 
   // Cargar tareas
@@ -72,7 +111,12 @@ export default function GanttApp() {
 
     const { data, error } = await supabase
       .from('proyectos')
-      .insert([{ nombre: nuevoNombreProyecto, encargado: nuevoEncargadoProyecto }])
+      .insert([{
+        nombre: nuevoNombreProyecto,
+        encargado: nuevoEncargadoProyecto,
+        fecha_inicio: nuevaFechaInicioProj,
+        fecha_fin: nuevaFechaFinProj,
+      }])
       .select()
 
     if (!error && data) {
@@ -98,22 +142,27 @@ export default function GanttApp() {
       progreso: Number(nuevaTarea.progreso) || 0,
       tipo: nuevaTarea.tipo || 'task',
       encargado: nuevaTarea.encargado || '',
+      dependencias: nuevaTarea.dependencias || '',
     }
 
-    const { data, error } = await supabase.from('tareas').insert([payload]).select()
+    const { data, error } = await supabase
+      .from('tareas')
+      .insert([payload])
+      .select()
 
-    if (!error && data) {
-      setTareas([...tareas, data[0]].sort((a, b) => a.msp_id.localeCompare(b.msp_id, undefined, { numeric: true })))
+    if (error) {
+      console.error('Error al agregar tarea:', error)
+      alert('No se pudo guardar la tarea. Revisa la consola.')
+      return
+    }
+
+    if (data && data.length > 0) {
+      setTareas((prev) =>
+        [...prev, data[0]].sort((a, b) =>
+          a.msp_id.localeCompare(b.msp_id, undefined, { numeric: true })
+        )
+      )
       setMostrarModalTarea(false)
-      setNuevaTarea({
-        msp_id: '1.' + (tareas.length + 1),
-        nombre: '',
-        fecha_inicio: new Date().toISOString().split('T')[0],
-        fecha_fin: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-        progreso: 0,
-        tipo: 'task',
-        encargado: '',
-      })
     }
   }
 
@@ -126,6 +175,44 @@ export default function GanttApp() {
     }
   }
 
+  // Actualizar dependencia en Supabase al conectar
+  const conectarTareas = async (idHijo: number, idPadreMsp: string) => {
+    const tareaHija = tareas.find(t => t.id === idHijo)
+    if (!tareaHija) return
+
+    const depsActuales = tareaHija.dependencias ? tareaHija.dependencias.split(',').map(s => s.trim()) : []
+    if (depsActuales.includes(idPadreMsp)) return
+
+    const nuevasDeps = [...depsActuales, idPadreMsp].join(', ')
+
+    const { error } = await supabase
+      .from('tareas')
+      .update({ dependencias: nuevasDeps })
+      .eq('id', idHijo)
+
+    if (!error) {
+      setTareas(tareas.map(t => t.id === idHijo ? { ...t, dependencias: nuevasDeps } : t))
+    }
+  }
+
+  // Eliminar dependencia específica al hacer doble clic en la línea
+  const desconectarTareas = async (idHijo: number, idPadreMsp: string) => {
+    const tareaHija = tareas.find(t => t.id === idHijo)
+    if (!tareaHija || !tareaHija.dependencias) return
+
+    const depsActuales = tareaHija.dependencias.split(',').map(s => s.trim())
+    const nuevasDeps = depsActuales.filter(dep => dep !== idPadreMsp).join(', ')
+
+    const { error } = await supabase
+      .from('tareas')
+      .update({ dependencias: nuevasDeps })
+      .eq('id', idHijo)
+
+    if (!error) {
+      setTareas(tareas.map(t => t.id === idHijo ? { ...t, dependencias: nuevasDeps } : t))
+    }
+  }
+
   // Exportar XML
   const handleExportarXML = () => {
     if (!proyectoSeleccionado) return
@@ -133,36 +220,120 @@ export default function GanttApp() {
     downloadXMLFile(`${proyectoSeleccionado.nombre.replace(/\s+/g, '_')}_Gantt.xml`, xmlContent)
   }
 
-  // Cálculo de fechas para la línea de tiempo visual (Octubre - Noviembre 2026 o rango dinámico)
-  // Generamos un rango fijo de 45 días a partir del 1 de Octubre de 2026 para el ejemplo visual o fecha actual
-  const fechaBaseTimeline = new Date('2026-10-01')
-  const diasTimeline = Array.from({ length: 50 }, (_, i) => {
-    const d = new Date(fechaBaseTimeline)
-    d.setDate(d.getDate() + i)
-    return d
+  // --- MOTOR DE FECHAS 100% INMUNE A ZONAS HORARIAS (UTC MEDIODÍA) ---
+  const fechaToUtcMs = (fechaStr?: string) => {
+    if (!fechaStr) return Date.UTC(2026, 9, 1, 12, 0, 0)
+    const partes = fechaStr.split('T')[0].split('-')
+    if (partes.length !== 3) return Date.UTC(2026, 9, 1, 12, 0, 0)
+    const year = parseInt(partes[0], 10)
+    const month = parseInt(partes[1], 10) - 1
+    const day = parseInt(partes[2], 10)
+    return Date.UTC(year, month, day, 12, 0, 0)
+  }
+
+  const unDiaMs = 24 * 60 * 60 * 1000
+
+  const inicioProjMs = fechaToUtcMs(proyectoSeleccionado?.fecha_inicio || '2026-10-01')
+  const finProjMs = fechaToUtcMs(proyectoSeleccionado?.fecha_fin || '2026-12-31')
+
+  const totalDias = Math.max(1, Math.round((finProjMs - inicioProjMs) / unDiaMs) + 1)
+
+  const diasTimeline = Array.from({ length: totalDias }, (_, i) => {
+    const dMs = inicioProjMs + (i * unDiaMs)
+    return new Date(dMs)
   })
 
-  // Función para calcular posición en píxeles o porcentaje de las barras en el timeline
-  const calcularPosicionBarra = (inicioStr: string, finStr: string) => {
-    const inicio = new Date(inicioStr).getTime()
-    const fin = new Date(finStr).getTime()
-    const base = fechaBaseTimeline.getTime()
-    const unDia = 86400000
+  // Agrupar días por Meses para la cabecera superior
+  const mesesTimeline: { nombreMes: string; span: number }[] = []
+  let mesActual = ''
+  let contadorDiasMes = 0
 
-    const offsetDias = Math.max(0, Math.floor((inicio - base) / unDia))
-    const duracionDias = Math.max(1, Math.ceil((fin - inicio) / unDia))
+  diasTimeline.forEach((d) => {
+    const nombreMesStr = d.toLocaleString('es-CL', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    const nombreMesCap = nombreMesStr.charAt(0).toUpperCase() + nombreMesStr.slice(1)
+    if (nombreMesCap !== mesActual) {
+      if (mesActual !== '') {
+        mesesTimeline.push({ nombreMes: mesActual, span: contadorDiasMes })
+      }
+      mesActual = nombreMesCap
+      contadorDiasMes = 1
+    } else {
+      contadorDiasMes++
+    }
+  })
+  if (mesActual !== '') {
+    mesesTimeline.push({ nombreMes: mesActual, span: contadorDiasMes })
+  }
+
+  // Calcular posición y ancho de barras en píxeles (32px por día)
+  const calcularPosicionBarra = (inicioStr: string, finStr: string) => {
+    const inicioMs = fechaToUtcMs(inicioStr)
+    const finMs = fechaToUtcMs(finStr)
+
+    const offsetDias = Math.round((inicioMs - inicioProjMs) / unDiaMs)
+    const duracionDias = Math.max(1, Math.round((finMs - inicioMs) / unDiaMs) + 1)
 
     return {
-      left: offsetDias * 32, // 32px por cada columna de día
-      width: Math.max(duracionDias * 32, 28),
+      left: offsetDias * 32,
+      width: duracionDias * 32,
     }
   }
 
-  const hoyStr = '2026-10-14' // Línea de hoy simulada según la imagen
+  // Cálculo exacto de la línea de "HOY" utilizando el estado seguro del cliente
+  const offsetHoyDias = Math.round((hoyUtcMs - inicioProjMs) / unDiaMs)
+  const posicionHoyPx = offsetHoyDias * 32 + 16
+
+  const formatearFechaChilena = (fechaStr?: string) => {
+    if (!fechaStr) return 'Sin fecha'
+    const partes = fechaStr.split('T')[0].split('-')
+    if (partes.length !== 3) return fechaStr
+    const [yyyy, mm, dd] = partes
+    return `${dd}-${mm}-${yyyy}`
+  }
+
+  // Efecto global para manejar el movimiento y soltado del ratón al arrastrar conectores
+  useEffect(() => {
+    if (tareaOrigenId === null) return
+
+    const handleGlobalMouseMove = (e: MouseEvent) => {
+      const ganttContainer = document.getElementById('gantt-timeline-container')
+      if (!ganttContainer) return
+      const rect = ganttContainer.getBoundingClientRect()
+      
+      setMousePos({
+        x: e.clientX - rect.left + ganttContainer.scrollLeft,
+        y: e.clientY - rect.top + ganttContainer.scrollTop
+      })
+    }
+
+    const handleGlobalMouseUp = () => {
+      setTareaOrigenId(null)
+      setMousePos(null)
+    }
+
+    window.addEventListener('mousemove', handleGlobalMouseMove)
+    window.addEventListener('mouseup', handleGlobalMouseUp)
+
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalMouseMove)
+      window.removeEventListener('mouseup', handleGlobalMouseUp)
+    }
+  }, [tareaOrigenId])
+
+  const registrarDestino = (tareaDestinoId: number) => {
+    if (tareaOrigenId !== null && tareaOrigenId !== tareaDestinoId) {
+      const tareaPadre = tareas.find(t => t.id === tareaOrigenId)
+      if (tareaPadre) {
+        conectarTareas(tareaDestinoId, tareaPadre.msp_id)
+      }
+    }
+    setTareaOrigenId(null)
+    setMousePos(null)
+  }
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col font-sans select-none">
-      {/* Barra Superior estilo MS Project */}
+      {/* Header */}
       <header className="bg-slate-900 text-white px-4 py-2.5 flex flex-wrap justify-between items-center shadow border-b border-slate-800">
         <div className="flex items-center space-x-3">
           <span className="text-xl">📊</span>
@@ -180,7 +351,7 @@ export default function GanttApp() {
           >
             {proyectos.map((p) => (
               <option key={p.id} value={p.id}>
-                📁 {p.nombre} ({p.encargado || 'Sin encargado'})
+                📁 {p.nombre} ({formatearFechaChilena(p.fecha_inicio)} al {formatearFechaChilena(p.fecha_fin)})
               </option>
             ))}
           </select>
@@ -211,25 +382,25 @@ export default function GanttApp() {
         </div>
       </header>
 
-      {/* Contenedor Principal divido en Tabla Izquierda y Gantt Derecho */}
+      {/* Contenedor Principal */}
       {proyectoSeleccionado ? (
         <div className="flex-1 flex overflow-x-auto bg-white border-t border-slate-200">
           
-          {/* ================= PANEL IZQUIERDO: TABLA DE TAREAS ================= */}
-          <div className="w-[480px] min-w-[480px] border-r border-slate-200 flex flex-col bg-white z-10 shadow-lg">
-            {/* Cabecera Tabla */}
+          {/* PANEL IZQUIERDO: TABLA DE TAREAS */}
+          <div className="w-[500px] min-w-[500px] border-r border-slate-200 flex flex-col bg-white z-10 shadow-lg">
             <div className="grid grid-cols-12 bg-slate-100 text-slate-600 font-bold text-[11px] uppercase tracking-wider border-b border-slate-200 py-2.5 px-3">
               <div className="col-span-2">MSP ID</div>
-              <div className="col-span-6">Nombre de tarea</div>
+              <div className="col-span-5">Nombre de tarea</div>
               <div className="col-span-3">Encargado</div>
+              <div className="col-span-1 text-center" title="Dependencias">Dep</div>
               <div className="col-span-1 text-center">✕</div>
             </div>
 
-            {/* Filas de Tareas */}
             <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
               {tareas.length > 0 ? (
                 tareas.map((t) => {
                   const esFase = t.tipo === 'project'
+                  const nivelIndentacion = (t.msp_id.split('.').length - 1) * 12
                   return (
                     <div
                       key={t.id}
@@ -238,14 +409,17 @@ export default function GanttApp() {
                       }`}
                     >
                       <div className="col-span-2 font-mono text-slate-500">{t.msp_id}</div>
-                      <div className="col-span-6 truncate pr-2" title={t.nombre}>
-                        <span style={{ paddingLeft: `${(t.msp_id.split('.').length - 1) * 12}px` }}>
+                      <div className="col-span-5 truncate pr-2" title={t.nombre}>
+                        <span style={{ paddingLeft: `${nivelIndentacion}px` }} className="inline-block">
                           {esFase ? '📁 ' : '🔹 '}
                           {t.nombre}
                         </span>
                       </div>
                       <div className="col-span-3 text-slate-500 truncate" title={t.encargado}>
                         {t.encargado || '-'}
+                      </div>
+                      <div className="col-span-1 text-center font-mono text-[10px] text-amber-600 font-bold" title={t.dependencias || 'Sin dependencias'}>
+                        {t.dependencias || '-'}
                       </div>
                       <div className="col-span-1 text-center">
                         <button
@@ -267,25 +441,40 @@ export default function GanttApp() {
             </div>
           </div>
 
-          {/* ================= PANEL DERECHO: LÍNEA DE TIEMPO GANTT ================= */}
-          <div className="flex-1 overflow-x-auto relative bg-slate-50">
-            <div className="min-w-max flex flex-col">
+          {/* PANEL DERECHO: LÍNEA DE TIEMPO GANTT CON MESES Y CONECTORES INTERACTIVOS */}
+          <div 
+            id="gantt-timeline-container"
+            className="flex-1 overflow-x-auto relative bg-slate-50"
+          >
+            <div className="min-w-max flex flex-col relative">
               
-              {/* Cabecera de Meses y Días */}
-              <div className="bg-slate-200 border-b border-slate-300 flex text-[10px] text-slate-600 font-semibold">
-                <div className="h-6 flex items-center px-4 bg-slate-300 border-r border-slate-300 sticky left-0 z-20">
-                  Octubre 2026 / Noviembre 2026
+              {/* Fila superior: Meses */}
+              <div className="bg-slate-300 border-b border-slate-300 flex text-[11px] text-slate-700 font-bold">
+                <div className="flex">
+                  {mesesTimeline.map((mes, idx) => (
+                    <div
+                      key={idx}
+                      className="h-6 flex items-center justify-center border-r border-slate-400 bg-slate-200 text-slate-800 font-semibold px-2 uppercase tracking-wide text-[10px]"
+                      style={{ width: `${mes.span * 32}px` }}
+                    >
+                      {mes.nombreMes}
+                    </div>
+                  ))}
                 </div>
+              </div>
+
+              {/* Fila de Días y Semanas */}
+              <div className="bg-slate-200 border-b border-slate-300 flex text-[10px] text-slate-600 font-semibold">
                 <div className="flex">
                   {diasTimeline.map((d, idx) => {
-                    const diaSemana = ['D', 'L', 'M', 'M', 'J', 'V', 'S'][d.getDay()]
-                    const numeroDia = d.getDate()
-                    const esFinSemana = d.getDay() === 0 || d.getDay() === 6
+                    const diaSemana = ['D', 'L', 'M', 'M', 'J', 'V', 'S'][d.getUTCDay()]
+                    const numeroDia = d.getUTCDate()
+                    const esFinSemana = d.getUTCDay() === 0 || d.getUTCDay() === 6
                     return (
                       <div
                         key={idx}
                         className={`w-8 h-6 flex flex-col items-center justify-center border-r border-slate-300 ${
-                          esFinSemana ? 'bg-slate-250 text-slate-400' : ''
+                          esFinSemana ? 'bg-slate-300/60 text-slate-400' : ''
                         }`}
                       >
                         <span className="text-[9px] font-bold">{numeroDia}</span>
@@ -296,40 +485,148 @@ export default function GanttApp() {
                 </div>
               </div>
 
-              {/* Cuerpo del Gráfico de Gantt (Barras y Línea de Hoy) */}
+              {/* Cuerpo del Gantt con Línea de HOY y CONECTORES SVG */}
               <div className="relative divide-y divide-slate-200">
-                {/* Línea Vertical Roja de "Hoy" */}
-                <div
-                  className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-10 pointer-events-none"
-                  style={{ left: `${13 * 32}px` }} // Posicionado simétricamente en el día actual
-                >
-                  <span className="absolute -top-4 -left-3 bg-red-500 text-white text-[9px] px-1 rounded font-bold">
-                    Hoy
-                  </span>
-                </div>
+                
+                {/* SVG para dibujar las flechas conectoras permanentes y la línea activa al arrastrar */}
+                <svg className="absolute inset-0 w-full h-full pointer-events-auto z-20">
+                  <defs>
+                    <marker
+                      id="arrow"
+                      viewBox="0 0 10 10"
+                      refX="6"
+                      refY="5"
+                      markerWidth="6"
+                      markerHeight="6"
+                      orient="auto-start-reverse"
+                    >
+                      <path d="M 0 2 L 10 5 L 0 8 z" fill="#f97316" />
+                    </marker>
+                  </defs>
 
-                {tareas.map((t) => {
+                  {/* Líneas de dependencias guardadas (Con doble clic para eliminar) */}
+                  {tareas.map((tarea, index) => {
+                    if (!tarea.dependencias) return null
+                    const depIds = tarea.dependencias.split(',').map(s => s.trim())
+                    
+                    return depIds.map((depId) => {
+                      const tareaPadre = tareas.find(t => t.msp_id === depId)
+                      if (!tareaPadre) return null
+
+                      const indexPadre = tareas.findIndex(t => t.id === tareaPadre.id)
+                      if (indexPadre === -1) return null
+
+                      const posPadre = calcularPosicionBarra(tareaPadre.fecha_inicio, tareaPadre.fecha_fin)
+                      const posHija = calcularPosicionBarra(tarea.fecha_inicio, tarea.fecha_fin)
+
+                      const x1 = posPadre.left + posPadre.width
+                      const y1 = indexPadre * 36 + 18
+
+                      const x2 = posHija.left
+                      const y2 = index * 36 + 18
+
+                      const controlPointOffset = Math.max(15, Math.abs(x2 - x1) / 2)
+                      const pathData = `M ${x1} ${y1} C ${x1 + controlPointOffset} ${y1}, ${x2 - controlPointOffset} ${y2}, ${x2 - 4} ${y2}`
+
+                      return (
+                        <g key={`${tareaPadre.id}-${tarea.id}`} className="cursor-pointer group">
+                          {/* Línea invisible más gruesa para facilitar el doble clic */}
+                          <path
+                            d={pathData}
+                            fill="none"
+                            stroke="transparent"
+                            strokeWidth="12"
+                            onDoubleClick={() => {
+                              if (confirm(`¿Deseas eliminar la dependencia entre "${tareaPadre.nombre}" y "${tarea.nombre}"?`)) {
+                                desconectarTareas(tarea.id, tareaPadre.msp_id)
+                              }
+                            }}
+                          />
+                          {/* Línea visible de la flecha */}
+                          <path
+                            d={pathData}
+                            fill="none"
+                            stroke="#f97316"
+                            strokeWidth="2"
+                            strokeDasharray="3 3"
+                            markerEnd="url(#arrow)"
+                            className="hover:stroke-red-500 hover:stroke-[3px] transition"
+                            onDoubleClick={() => {
+                              if (confirm(`¿Deseas eliminar la dependencia entre "${tareaPadre.nombre}" y "${tarea.nombre}"?`)) {
+                                desconectarTareas(tarea.id, tareaPadre.msp_id)
+                              }
+                            }}
+                          />
+                        </g>
+                      )
+                    })
+                  })}
+
+                  {/* Línea temporal mientras se arrastra el conector */}
+                  {tareaOrigenId !== null && mousePos && (() => {
+                    const idxPadre = tareas.findIndex(t => t.id === tareaOrigenId)
+                    if (idxPadre === -1) return null
+                    const tareaP = tareas[idxPadre]
+                    const posP = calcularPosicionBarra(tareaP.fecha_inicio, tareaP.fecha_fin)
+                    const x1 = posP.left + posP.width
+                    const y1 = idxPadre * 36 + 18
+                    return (
+                      <line
+                        x1={x1}
+                        y1={y1}
+                        x2={mousePos.x}
+                        y2={mousePos.y}
+                        stroke="#f97316"
+                        strokeWidth="2"
+                        strokeDasharray="4 4"
+                      />
+                    )
+                  })()}
+                </svg>
+
+                {/* Línea roja vertical de HOY */}
+                {offsetHoyDias >= 0 && offsetHoyDias < totalDias && (
+                  <div
+                    className="absolute top-0 bottom-0 w-[2px] bg-red-500 z-10 pointer-events-none"
+                    style={{ left: `${posicionHoyPx}px` }}
+                  >
+                    <span className="absolute -top-4 -left-3 bg-red-500 text-white text-[9px] px-1 rounded font-bold shadow">
+                      HOY
+                    </span>
+                  </div>
+                )}
+
+                {tareas.map((t, index) => {
                   const esFase = t.tipo === 'project'
                   const { left, width } = calcularPosicionBarra(t.fecha_inicio, t.fecha_fin)
 
                   return (
-                    <div key={t.id} className="h-9 flex items-center relative hover:bg-slate-100/60">
-                      {/* Cuadrícula de fondo por día */}
+                    <div 
+                      key={t.id} 
+                      className="h-9 flex items-center relative hover:bg-slate-100/60"
+                    >
                       <div className="absolute inset-0 flex pointer-events-none">
                         {diasTimeline.map((_, i) => (
                           <div key={i} className="w-8 border-r border-slate-200 h-full" />
                         ))}
                       </div>
 
-                      {/* Barra de Tarea Gantt */}
+                      {/* Barra de Tarea con puntos interactivos para conectar */}
                       <div
-                        className="absolute h-5 rounded flex items-center px-2 shadow-sm transition-all"
+                        className="absolute h-5 rounded flex items-center px-2 shadow-sm transition-all group cursor-pointer"
                         style={{
                           left: `${left}px`,
                           width: `${width}px`,
                           backgroundColor: esFase ? '#1e3a8a' : t.tipo === 'milestone' ? '#7c3aed' : '#0ea5e9',
                         }}
                       >
+                        {/* Circulito izquierdo (Punto de llegada de dependencia) */}
+                        <div 
+                          onMouseUp={() => registrarDestino(t.id)}
+                          className="absolute -left-1.5 w-3 h-3 bg-amber-400 border-2 border-white rounded-full shadow cursor-pointer hover:scale-125 transition z-30" 
+                          title="Soltar aquí para conectar dependencia" 
+                        />
+
                         <div
                           className="absolute left-0 top-0 bottom-0 bg-emerald-400/40 rounded-l pointer-events-none"
                           style={{ width: `${t.progreso}%` }}
@@ -337,6 +634,16 @@ export default function GanttApp() {
                         <span className="text-[10px] text-white truncate font-medium relative z-10">
                           {t.nombre} ({t.progreso}%)
                         </span>
+
+                        {/* Circulito derecho (Punto de partida para arrastrar la línea) */}
+                        <div 
+                          onMouseDown={(e) => {
+                            e.stopPropagation()
+                            setTareaOrigenId(t.id)
+                          }}
+                          className="absolute -right-1.5 w-3 h-3 bg-amber-500 border-2 border-white rounded-full shadow cursor-grab active:cursor-grabbing hover:scale-125 transition z-30" 
+                          title="Haz clic y arrastra hacia otra tarea para crear una dependencia" 
+                        />
                       </div>
                     </div>
                   )
@@ -351,7 +658,6 @@ export default function GanttApp() {
         <div className="flex-1 flex flex-col items-center justify-center p-12 text-center bg-white">
           <span className="text-4xl mb-3">📁</span>
           <h2 className="text-xl font-bold text-slate-800 mb-2">No hay ningún proyecto activo</h2>
-          <p className="text-slate-500 mb-4 text-sm">Crea o selecciona un proyecto para visualizar el diagrama Gantt.</p>
           <button
             onClick={() => setMostrarModalProyecto(true)}
             className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded text-sm font-semibold shadow"
@@ -375,7 +681,7 @@ export default function GanttApp() {
                   placeholder="Ej: Proyecto Integrado Tecnored"
                   value={nuevoNombreProyecto}
                   onChange={(e) => setNuevoNombreProyecto(e.target.value)}
-                  className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
                 />
               </div>
               <div>
@@ -385,8 +691,30 @@ export default function GanttApp() {
                   placeholder="Ej: Francisco Ruiz"
                   value={nuevoEncargadoProyecto}
                   onChange={(e) => setNuevoEncargadoProyecto(e.target.value)}
-                  className="w-full border border-slate-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Fecha Inicio Proyecto</label>
+                  <input
+                    type="date"
+                    required
+                    value={nuevaFechaInicioProj}
+                    onChange={(e) => setNuevaFechaInicioProj(e.target.value)}
+                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Fecha Fin Proyecto</label>
+                  <input
+                    type="date"
+                    required
+                    value={nuevaFechaFinProj}
+                    onChange={(e) => setNuevaFechaFinProj(e.target.value)}
+                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                  />
+                </div>
               </div>
               <div className="flex justify-end space-x-2 pt-2">
                 <button
@@ -442,15 +770,15 @@ export default function GanttApp() {
                 <input
                   type="text"
                   required
-                  placeholder="Ej: Levantamiento y diseño funcional"
+                  placeholder="Ej: Orden de Compra / EWM"
                   value={nuevaTarea.nombre || ''}
                   onChange={(e) => setNuevaTarea({ ...nuevaTarea, nombre: e.target.value })}
                   className="w-full border border-slate-300 rounded px-3 py-2 text-sm"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Encargado</label>
                   <input
                     type="text"
@@ -473,7 +801,17 @@ export default function GanttApp() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 mb-1">Dependencia (MSP ID)</label>
+                  <input
+                    type="text"
+                    placeholder="Ej: 1 o 1.1"
+                    value={nuevaTarea.dependencias || ''}
+                    onChange={(e) => setNuevaTarea({ ...nuevaTarea, dependencias: e.target.value })}
+                    className="w-full border border-slate-300 rounded px-3 py-2 text-sm font-mono text-amber-600 font-bold"
+                  />
+                </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Fecha Inicio</label>
                   <input

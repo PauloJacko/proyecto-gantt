@@ -1,8 +1,10 @@
 export interface Proyecto {
-  id: number 
+  id: number
   nombre: string
   descripcion?: string
   encargado?: string
+  fecha_inicio?: string
+  fecha_fin?: string
   created_at?: string
 }
 
