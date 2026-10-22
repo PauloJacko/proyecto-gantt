@@ -10,7 +10,7 @@ export default function GanttApp() {
   const [proyectoSeleccionado, setProyectoSeleccionado] = useState<Proyecto | null>(null)
   const [tareas, setTareas] = useState<TareaGantt[]>([])
 
-  // Estado seguro para la fecha actual de "HOY" (evita errores de SSR en Next.js)
+  // HOY
   const [hoyUtcMs, setHoyUtcMs] = useState<number>(Date.UTC(2026, 9, 21, 12, 0, 0))
 
   // Modales Proyecto
@@ -34,11 +34,11 @@ export default function GanttApp() {
     dependencias: '',
   })
 
-  // Estado para el Arrastre de Conectores (Drag and Drop interactivo global)
+  // DRAG AND DROP
   const [tareaOrigenId, setTareaOrigenId] = useState<number | null>(null)
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null)
 
-  // Asignar fechas seguras en cliente al montar el componente
+  // FECHA A LOS CLIENTES
   useEffect(() => {
     const hoyReal = new Date()
     setHoyUtcMs(
@@ -198,13 +198,13 @@ export default function GanttApp() {
     e.preventDefault()
     if (!proyectoSeleccionado || !nuevaTarea.nombre) return
 
-if (tareaEnEdicionId !== null) {
+    if (tareaEnEdicionId !== null) {
       // --- EDITAR TAREA EXISTENTE ---
       const payload = {
         msp_id: nuevaTarea.msp_id || '1',
-        nombre: nuevaTarea.nombre || '',
-        fecha_inicio: nuevaTarea.fecha_inicio || '',
-        fecha_fin: nuevaTarea.fecha_fin || '',
+        nombre: nuevaTarea.nombre,
+        fecha_inicio: nuevaTarea.fecha_inicio,
+        fecha_fin: nuevaTarea.fecha_fin,
         tipo: nuevaTarea.tipo || 'task',
         encargado: nuevaTarea.encargado || '',
         dependencias: nuevaTarea.dependencias || '',
@@ -557,7 +557,7 @@ if (tareaEnEdicionId !== null) {
           
           {/* PANEL IZQUIERDO: TABLA DE TAREAS */}
           <div className="w-[620px] min-w-[620px] border-r border-slate-200 flex flex-col bg-white z-10 shadow-lg">
-            <div className="grid grid-cols-12 bg-slate-100 text-slate-600 font-bold text-[11px] uppercase tracking-wider border-b border-slate-200 py-2.5 px-3 items-center">
+            <div className="grid grid-cols-12 bg-slate-100 text-slate-600 font-bold text-[11px] uppercase tracking-wider border-b border-slate-200 py-2.5 px-3 items-center h-12">
               <div className="col-span-2">MSP ID</div>
               <div className="col-span-3">Nombre de tarea</div>
               <div className="col-span-2">Encargado</div>
@@ -579,11 +579,11 @@ if (tareaEnEdicionId !== null) {
                   return (
                     <div
                       key={t.id}
-                      className={`grid grid-cols-12 items-center py-2 px-3 text-xs hover:bg-blue-50/50 transition ${
+                      className={`grid grid-cols-12 items-center px-3 text-xs hover:bg-blue-50/50 transition h-9 ${
                         esFase ? 'bg-blue-50/70 font-bold text-slate-900' : 'text-slate-700'
                       }`}
                     >
-                      <div className="col-span-2 font-mono text-slate-500 font-bold">{t.msp_id}</div>
+                      <div className="col-span-2 font-mono text-slate-500 font-bold truncate">{t.msp_id}</div>
                       
                       {/* Columna Nombre con sangría clara y jerárquica */}
                       <div className="col-span-3 flex items-center pr-2 overflow-hidden" title={t.nombre}>
@@ -625,7 +625,7 @@ if (tareaEnEdicionId !== null) {
                         )}
                       </div>
 
-                      <div className="col-span-1 text-center font-mono text-[10px] text-amber-600 font-bold" title={t.dependencias || 'Sin dependencias'}>
+                      <div className="col-span-1 text-center font-mono text-[10px] text-amber-600 font-bold truncate" title={t.dependencias || 'Sin dependencias'}>
                         {t.dependencias || '-'}
                       </div>
 
@@ -634,7 +634,7 @@ if (tareaEnEdicionId !== null) {
                         <button
                           onClick={() => abrirModalEditarTarea(t)}
                           className="text-blue-500 hover:text-blue-700 font-bold p-1 transition"
-                          title="Editar tarea (MSP ID, Nombre, Encargado, Fechas)"
+                          title="Editar tarea"
                         >
                           ✏️
                         </button>
@@ -660,15 +660,15 @@ if (tareaEnEdicionId !== null) {
             </div>
           </div>
 
-          {/* PANEL DERECHO: LÍNEA DE TIEMPO GANTT CON MESES Y CONECTORES INTERACTIVOS */}
+          {/* PANEL DERECHO: LÍNEA DE TIEMPO GANTT CON ALTURA MILIMÉTRICAMENTE SINCRONIZADA */}
           <div 
             id="gantt-timeline-container"
             className="flex-1 overflow-x-auto relative bg-slate-50"
           >
             <div className="min-w-max flex flex-col relative">
               
-              {/* Fila superior: Meses */}
-              <div className="bg-slate-300 border-b border-slate-300 flex text-[11px] text-slate-700 font-bold">
+              {/* Fila superior: Meses (Altura exacta de 24px) */}
+              <div className="bg-slate-300 border-b border-slate-300 flex text-[11px] text-slate-700 font-bold h-6">
                 <div className="flex">
                   {mesesTimeline.map((mes, idx) => (
                     <div
@@ -682,8 +682,8 @@ if (tareaEnEdicionId !== null) {
                 </div>
               </div>
 
-              {/* Fila de Días y Semanas */}
-              <div className="bg-slate-200 border-b border-slate-300 flex text-[10px] text-slate-600 font-semibold">
+              {/* Fila de Días y Semanas (Altura exacta de 24px, equivalente a los 48px del header izquierdo) */}
+              <div className="bg-slate-200 border-b border-slate-300 flex text-[10px] text-slate-600 font-semibold h-6">
                 <div className="flex">
                   {diasTimeline.map((d, idx) => {
                     const diaSemana = ['D', 'L', 'M', 'M', 'J', 'V', 'S'][d.getUTCDay()]
@@ -831,7 +831,7 @@ if (tareaEnEdicionId !== null) {
                         ))}
                       </div>
 
-                      {/* Barra de Tarea con puntos interactivos para conectar */}
+                      {/* Barra de Tarea con altura de fila idéntica (h-5 dentro de h-9) */}
                       <div
                         className="absolute h-5 rounded flex items-center px-2 shadow-sm transition-all group cursor-pointer"
                         style={{
