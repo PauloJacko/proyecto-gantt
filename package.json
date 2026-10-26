@@ -27,5 +27,11 @@
     "eslint-config-next": "16.4.2",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "overrides": {
+    "gantt-task-react": {
+      "react": "$react",
+      "react-dom": "$react-dom"
+    }
   }
 }
