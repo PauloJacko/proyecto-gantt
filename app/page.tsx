@@ -22,7 +22,7 @@ export default function GanttApp() {
 
   // Modales Tarea (Crear / Editar)
   const [mostrarModalTarea, setMostrarModalTarea] = useState(false)
-  const [tareaEnEdicionId, setTareaEnEdicionId] = useState<number | null>(null) // null = creando nueva, número = editando existente
+  const [tareaEnEdicionId, setTareaEnEdicionId] = useState<number | null>(null)
   const [nuevaTarea, setNuevaTarea] = useState<Partial<TareaGantt>>({
     msp_id: '1.1',
     nombre: '',
@@ -347,7 +347,7 @@ export default function GanttApp() {
     downloadXMLFile(`${proyectoSeleccionado.nombre.replace(/\s+/g, '_')}_Gantt.xml`, xmlContent)
   }
 
-  // --- MOTOR DE FECHAS 100% INMUNE A ZONAS HORARIAS (UTC MEDIODÍA) ---
+  // --- MOTOR DE FECHAS  ---
   const fechaToUtcMs = (fechaStr?: string) => {
     if (!fechaStr) return Date.UTC(2026, 9, 1, 12, 0, 0)
     const partes = fechaStr.split('T')[0].split('-')
@@ -406,7 +406,7 @@ export default function GanttApp() {
     }
   }
 
-  // --- CÁLCULO DINÁMICO DEL % ESPERADO Y REAL (CON SOPORTE PARA FASES PRINCIPALES) ---
+  // --- CÁLCULO DINÁMICO DEL % ESPERADO Y REAL ---
   const calcularPorcentajesTarea = (t: TareaGantt): { esperado: number; real: number } => {
     const esFase = t.tipo === 'project' || !t.msp_id.includes('.')
     const hijas = tareas.filter(item => item.msp_id.startsWith(t.msp_id + '.') && item.msp_id !== t.msp_id)
@@ -667,7 +667,7 @@ export default function GanttApp() {
           >
             <div className="min-w-max flex flex-col relative">
               
-              {/* Fila superior: Meses (Altura exacta de 24px) */}
+              {/* Fila superior: Meses */}
               <div className="bg-slate-300 border-b border-slate-300 flex text-[11px] text-slate-700 font-bold h-6">
                 <div className="flex">
                   {mesesTimeline.map((mes, idx) => (
@@ -682,7 +682,7 @@ export default function GanttApp() {
                 </div>
               </div>
 
-              {/* Fila de Días y Semanas (Altura exacta de 24px, equivalente a los 48px del header izquierdo) */}
+              {/* Fila de Días y Semanas */}
               <div className="bg-slate-200 border-b border-slate-300 flex text-[10px] text-slate-600 font-semibold h-6">
                 <div className="flex">
                   {diasTimeline.map((d, idx) => {
@@ -723,7 +723,7 @@ export default function GanttApp() {
                     </marker>
                   </defs>
 
-                  {/* Líneas de dependencias guardadas (Con doble clic para eliminar) */}
+                  {/* Líneas de dependencias guardadas */}
                   {tareas.map((tarea, index) => {
                     if (!tarea.dependencias) return null
                     const depIds = tarea.dependencias.split(',').map(s => s.trim())
@@ -831,7 +831,7 @@ export default function GanttApp() {
                         ))}
                       </div>
 
-                      {/* Barra de Tarea con altura de fila idéntica (h-5 dentro de h-9) */}
+                      {/* Barra de Tarea con altura de fila idéntica  */}
                       <div
                         className="absolute h-5 rounded flex items-center px-2 shadow-sm transition-all group cursor-pointer"
                         style={{
@@ -840,7 +840,7 @@ export default function GanttApp() {
                           backgroundColor: esFase ? '#1e3a8a' : t.tipo === 'milestone' ? '#7c3aed' : '#0ea5e9',
                         }}
                       >
-                        {/* Circulito izquierdo (Punto de llegada de dependencia) */}
+                        {/* Circulito izquierdo */}
                         <div 
                           onMouseUp={() => registrarDestino(t.id!)}
                           className="absolute -left-1.5 w-3 h-3 bg-amber-400 border-2 border-white rounded-full shadow cursor-pointer hover:scale-125 transition z-30" 
@@ -857,7 +857,7 @@ export default function GanttApp() {
                           {t.nombre} (Real: {porcentajeReal}%)
                         </span>
 
-                        {/* Circulito derecho (Punto de partida para arrastrar la línea) */}
+                        {/* Circulito derecho */}
                         <div 
                           onMouseDown={(e) => {
                             e.stopPropagation()
